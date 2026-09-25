@@ -52,7 +52,7 @@ fn generate_rustdoc_json(cx: &PackageContext) -> Result<PathBuf> {
         None => cx.metadata.target_directory.join("insert-docs").into_std_path_buf(),
     };
 
-    let (output, path) = rustdoc_json::generate(rustdoc_json::Options {
+    let generated = rustdoc_json::generate(rustdoc_json::Options {
         metadata: &cx.metadata,
         package: cx.package,
         package_target: cx.target,
@@ -69,11 +69,11 @@ fn generate_rustdoc_json(cx: &PackageContext) -> Result<PathBuf> {
         no_deps: cx.cfg.no_deps,
     })?;
 
-    if !output.status.success() {
+    if !generated.output.status.success() {
         if command_output == CommandOutput::Collect {
             // write an empty line to separate our messages from the invoked command
             cx.log.foreign_write_incoming();
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            eprint!("{}", String::from_utf8_lossy(&generated.output.stderr));
         }
 
         let see = if command_output != CommandOutput::Ignore { " (see stderr above)" } else { "" };
@@ -81,7 +81,7 @@ fn generate_rustdoc_json(cx: &PackageContext) -> Result<PathBuf> {
         bail!("Failed to build rustdoc JSON{see}");
     }
 
-    path
+    generated.json_path
 }
 
 struct ExtractDocsOptions<'a> {

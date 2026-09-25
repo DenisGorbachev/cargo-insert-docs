@@ -42,6 +42,13 @@ pub enum CommandOutput {
     Collect,
 }
 
+/// Keep process output alongside discovery errors so callers can report
+/// compiler failures and their diagnostics first.
+pub struct Generation {
+    pub output: Output,
+    pub json_path: Result<PathBuf>,
+}
+
 #[derive(Deserialize)]
 struct UnitGraph {
     version: u32,
@@ -58,29 +65,60 @@ struct Unit {
 }
 
 /// Generate documentation for the selected library or binary.
-///
-/// Return discovery errors separately so callers can report process failures first.
-pub fn generate(options: Options) -> Result<(Output, Result<PathBuf>)> {
-    let Options {
-        metadata,
-        package,
-        package_target,
-        toolchain,
-        all_features,
-        no_default_features,
-        features,
-        document_private_items,
-        manifest_path,
-        target,
-        target_dir,
-        no_deps,
-        quiet,
-        output: output_option,
-    } = options;
+pub fn generate(mut options: Options) -> Result<Generation> {
+    let mut command = cargo_rustdoc_command(&mut options)?;
+    let target_dir = options.target_dir.unwrap_or(options.metadata.target_directory.as_std_path());
+    let context = format!(
+        "failed to discover rustdoc JSON for package `{}`, target `{}` ({:?}), \
+         compilation target {}, toolchain `{}`, target directory `{}`",
+        options.package.name,
+        options.package_target.name,
+        options.package_target.kind,
+        options
+            .target
+            .unwrap_or("inherited from Cargo configuration/environment (or the host default)"),
+        options.toolchain.unwrap_or("inherited"),
+        target_dir.display(),
+    );
 
+    // Resolve targets with the same Cargo invocation, without duplicating its
+    // configuration or host-tuple resolution. The graph also lets us reject
+    // ambiguous targets before they can overwrite each other's documentation.
+    let mut graph_command = Command::new(command.get_program());
+    graph_command.args(command.get_args()).arg("--unit-graph");
+    let graph_output = run(&mut graph_command, options.output)?;
+    let directory = prepare_documentation_directory(
+        &graph_output,
+        options.package,
+        options.package_target,
+        target_dir,
+    )
+    .wrap_err_with(|| format!("{context}; command: {graph_command:?}"));
+    let directory = match directory {
+        Ok(directory) => directory,
+        Err(error) => return Ok(Generation { output: graph_output, json_path: Err(error) }),
+    };
+
+    if options.document_private_items {
+        command.args(["--", "--document-private-items"]);
+    }
+
+    let output = run(&mut command, options.output)?;
+    let json_path = generated_artifact_path(&output, options.package, options.package_target)
+        .wrap_err_with(|| {
+            format!(
+                "{context}; documentation directory `{}`; command: {command:?}",
+                directory.display()
+            )
+        });
+
+    Ok(Generation { output, json_path })
+}
+
+fn cargo_rustdoc_command(options: &mut Options<'_>) -> Result<Command> {
     let mut command = Command::new("cargo");
 
-    if let Some(toolchain) = toolchain {
+    if let Some(toolchain) = options.toolchain {
         command.arg(format!("+{toolchain}"));
     }
 
@@ -95,101 +133,53 @@ pub fn generate(options: Options) -> Result<(Output, Result<PathBuf>)> {
         "--message-format=json-render-diagnostics",
     ]);
 
-    if is_lib_like(package_target) {
+    if is_lib_like(options.package_target) {
         command.arg("--lib");
-    } else if package_target.is_bin() {
-        command.arg("--bin").arg(&package_target.name);
+    } else if options.package_target.is_bin() {
+        command.arg("--bin").arg(&options.package_target.name);
     } else {
         bail!("target must be lib or bin")
     }
 
-    if quiet {
+    if options.quiet {
         command.arg("--quiet");
     }
 
     command.arg("--color").arg("always");
 
-    if let Some(manifest_path) = manifest_path {
+    if let Some(manifest_path) = options.manifest_path {
         command.arg("--manifest-path");
         command.arg(manifest_path);
     }
 
-    if let Some(target) = target {
+    if let Some(target) = options.target {
         command.arg("--target");
         command.arg(target);
     }
 
-    if let Some(target_dir) = target_dir {
+    if let Some(target_dir) = options.target_dir {
         command.arg("--target-dir");
         command.arg(target_dir);
     }
 
-    if all_features {
+    if options.all_features {
         command.arg("--all-features");
     }
 
-    if no_default_features {
+    if options.no_default_features {
         command.arg("--no-default-features");
     }
 
-    for feature in features {
+    for feature in &mut *options.features {
         command.arg("--features").arg(feature);
     }
 
-    if no_deps {
+    if options.no_deps {
         command.arg("--no-deps");
     }
 
-    command.arg("--package").arg(&package.id.repr);
-
-    // Resolve targets with the same Cargo invocation, without duplicating its
-    // configuration or host-tuple resolution. The graph also lets us reject
-    // ambiguous targets before they can overwrite each other's documentation.
-    let mut graph_command = Command::new(command.get_program());
-    graph_command.args(command.get_args());
-    graph_command.arg("--unit-graph");
-    let graph_output = run(&mut graph_command, output_option)?;
-
-    let target_dir = target_dir.unwrap_or(metadata.target_directory.as_std_path());
-    let context = format!(
-        "failed to discover rustdoc JSON for package `{}`, target `{}` ({:?}), \
-         compilation target {}, toolchain `{}`, target directory `{}`",
-        package.name,
-        package_target.name,
-        package_target.kind,
-        target.unwrap_or("inherited from Cargo configuration/environment (or the host default)"),
-        toolchain.unwrap_or("inherited"),
-        target_dir.display(),
-    );
-    let directory = documentation_directory(&graph_output, package, package_target, target_dir)
-        .and_then(|directory| {
-            // With a separate build-dir, the supported Cargo can reuse cached
-            // JSON before creating a new target-dir's doc directory. Create the
-            // selected directory so Cargo can place its artifact there.
-            fs::create_dir_all(&directory).wrap_err_with(|| {
-                format!("failed to create rustdoc output directory `{}`", directory.display())
-            })?;
-            Ok(directory)
-        })
-        .wrap_err_with(|| format!("{context}; command: {graph_command:?}"));
-    let directory = match directory {
-        Ok(directory) => directory,
-        Err(error) => return Ok((graph_output, Err(error))),
-    };
-
-    if document_private_items {
-        command.args(["--", "--document-private-items"]);
-    }
-
-    let output = run(&mut command, output_option)?;
-    let path = generated_artifact_path(&output, package, package_target).wrap_err_with(|| {
-        format!(
-            "{context}; documentation directory `{}`; command: {command:?}",
-            directory.display()
-        )
-    });
-
-    Ok((output, path))
+    command.arg("--package").arg(&options.package.id.repr);
+    Ok(command)
 }
 
 fn run(command: &mut Command, output: CommandOutput) -> Result<Output> {
@@ -202,6 +192,22 @@ fn run(command: &mut Command, output: CommandOutput) -> Result<Output> {
     // Stdout contains Cargo's machine-readable graph or artifact messages;
     // json-render-diagnostics keeps compiler diagnostics on stderr.
     command.output().wrap_err_with(|| format!("failed to run {command:?}"))
+}
+
+fn prepare_documentation_directory(
+    output: &Output,
+    package: &Package,
+    target: &Target,
+    target_dir: &Path,
+) -> Result<PathBuf> {
+    let directory = documentation_directory(output, package, target, target_dir)?;
+    // With a separate build-dir, the supported Cargo can reuse cached JSON
+    // before creating a new target-dir's doc directory. Create the selected
+    // directory so Cargo can place its artifact there.
+    fs::create_dir_all(&directory).wrap_err_with(|| {
+        format!("failed to create rustdoc output directory `{}`", directory.display())
+    })?;
+    Ok(directory)
 }
 
 fn documentation_directory(
@@ -229,29 +235,12 @@ fn documentation_directory(
             graph.units.get(root).ok_or_else(|| eyre!("invalid Cargo unit graph root {root}"))?;
         if unit.mode != "doc"
             || unit.pkg_id != package.id
-            || unit.target.name != target.name
-            || unit.target.kind != target.kind
-            || unit.target.src_path != target.src_path
+            || !same_package_target(&unit.target, target)
         {
             continue;
         }
 
-        let mut path = target_dir.to_path_buf();
-        if let Some(platform) = &unit.platform {
-            if platform == "host-tuple" || platform.is_empty() {
-                bail!("Cargo did not resolve the compilation target `{platform}`");
-            }
-            // Cargo names custom-target directories after the JSON file's stem.
-            let directory = if platform.ends_with(".json") {
-                Path::new(platform)
-                    .file_stem()
-                    .ok_or_else(|| eyre!("invalid custom target `{platform}`"))?
-            } else {
-                platform.as_ref()
-            };
-            path.push(directory);
-        }
-        path.push("doc");
+        let path = platform_documentation_directory(target_dir, unit.platform.as_deref())?;
         directories.push((unit.platform.as_deref(), path));
     }
 
@@ -268,6 +257,32 @@ fn documentation_directory(
     })
 }
 
+fn platform_documentation_directory(target_dir: &Path, platform: Option<&str>) -> Result<PathBuf> {
+    let mut path = target_dir.to_path_buf();
+    if let Some(platform) = platform {
+        if platform == "host-tuple" || platform.is_empty() {
+            bail!("Cargo did not resolve the compilation target `{platform}`");
+        }
+        // Cargo names custom-target directories after the JSON file's stem.
+        let directory = if platform.ends_with(".json") {
+            Path::new(platform)
+                .file_stem()
+                .ok_or_else(|| eyre!("invalid custom target `{platform}`"))?
+        } else {
+            platform.as_ref()
+        };
+        path.push(directory);
+    }
+    path.push("doc");
+    Ok(path)
+}
+
+fn same_package_target(actual: &Target, requested: &Target) -> bool {
+    actual.name == requested.name
+        && actual.kind == requested.kind
+        && actual.src_path == requested.src_path
+}
+
 fn generated_artifact_path(output: &Output, package: &Package, target: &Target) -> Result<PathBuf> {
     if !output.status.success() {
         bail!("Cargo rustdoc failed with {}", output.status);
@@ -277,9 +292,7 @@ fn generated_artifact_path(output: &Output, package: &Package, target: &Target) 
     for message in Message::parse_stream(output.stdout.as_slice()) {
         if let Message::CompilerArtifact(artifact) = message?
             && artifact.package_id == package.id
-            && artifact.target.name == target.name
-            && artifact.target.kind == target.kind
-            && artifact.target.src_path == target.src_path
+            && same_package_target(&artifact.target, target)
         {
             paths.extend(
                 artifact.filenames.into_iter().filter(|path| path.extension() == Some("json")),

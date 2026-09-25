@@ -187,7 +187,30 @@ fn check_test_crate() -> Result {
     let stderr = cmd!("cargo run -q -- --check -p test-crate --quiet-cargo").stderr()?.strip_ansi();
     expect_file("tests/test-crate/stderr.txt", &stderr)?;
 
-    // create html
+    let html = generate_test_crate_html()?;
+    let mut html_links = compare_links::extract_links_from_html(&html);
+
+    let md = read("tests/test-crate/MEREAD.md")?;
+    let mut md_links = compare_links::extract_links_from_md(&md).split_off(3);
+
+    for (html, href) in &mut html_links {
+        *html = html.replace("…", "...");
+        *href = href.replace("/nightly/", "/");
+    }
+
+    for (_html, href) in &mut md_links {
+        // replace this crate
+        *href = href.replace("https://docs.rs/test-crate/0.0.0/test_crate/", "");
+
+        // replace foreign crate links
+        *href = re!(r#"https:\/\/docs\.rs\/[^\/]+\/[^\/]+\/"#).replace(href, "../").to_string();
+    }
+
+    let diff = compare_links::diff(&html_links, &md_links);
+    expect_file("tests/test-crate/links.diff", &diff)
+}
+
+fn generate_test_crate_html() -> Result<String> {
     let output =
         cmd!("cargo +nightly doc -p test-crate --lib --message-format=json-render-diagnostics")
             .stdout()?;
@@ -214,32 +237,7 @@ fn check_test_crate() -> Result {
         );
     };
 
-    // diff links
-    {
-        let html = read(html_path)?;
-        let mut html_links = compare_links::extract_links_from_html(&html);
-
-        let md = read("tests/test-crate/MEREAD.md")?;
-        let mut md_links = compare_links::extract_links_from_md(&md).split_off(3);
-
-        for (html, href) in &mut html_links {
-            *html = html.replace("…", "...");
-            *href = href.replace("/nightly/", "/");
-        }
-
-        for (_html, href) in &mut md_links {
-            // replace this crate
-            *href = href.replace("https://docs.rs/test-crate/0.0.0/test_crate/", "");
-
-            // replace foreign crate links
-            *href = re!(r#"https:\/\/docs\.rs\/[^\/]+\/[^\/]+\/"#).replace(href, "../").to_string();
-        }
-
-        let diff = compare_links::diff(&html_links, &md_links);
-        expect_file("tests/test-crate/links.diff", &diff)?;
-    }
-
-    OK
+    read(html_path)
 }
 
 fn print_error(message: &str) {
