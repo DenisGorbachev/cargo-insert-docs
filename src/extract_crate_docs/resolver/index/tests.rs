@@ -36,7 +36,7 @@ fn test_tree() {
     })
     .unwrap();
 
-    let json = fs::read_to_string(path).expect("failed to read generated rustdoc json");
+    let json = fs::read_to_string(path.unwrap()).expect("failed to read generated rustdoc json");
     let krate: Crate = serde_json::from_str(&json).expect("failed to parse generated rustdoc json");
     let tree = Tree::new(&krate).unwrap();
 

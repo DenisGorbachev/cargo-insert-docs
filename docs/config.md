@@ -64,6 +64,16 @@ For the cli, these are not arguments but subcommands instead and calling the sub
 |target|string||Target triple to document
 |target-dir|string||Directory for all generated artifacts
 
+Cargo resolves the compilation target: `target` (or `--target`) overrides
+`CARGO_BUILD_TARGET`, which overrides Cargo's `build.target` configuration.
+This includes `host-tuple` and custom JSON target specifications supported by the
+selected toolchain. Custom targets still require Cargo's usual unstable feature
+and standard library setup.
+
+Documentation extraction reads the JSON artifact reported by Cargo for the
+selected package and library or binary. If Cargo selects multiple
+compilation targets, select one with `--target` to avoid ambiguous documentation.
+
 ## Cli and Workspace fields
 
 These fields can be set in the cli and `[workspace.metadata.insert-docs]`.

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased]
 
+### Fixed
+
+- Read the rustdoc JSON artifact reported by Cargo, including when compilation targets are selected through Cargo configuration.
+
 ## [1.12.0] - 2026-09-25
 
 ### Changed

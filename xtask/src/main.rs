@@ -5,6 +5,7 @@ mod util;
 
 use std::env;
 
+use cargo_metadata::Message;
 use clap::{CommandFactory, Parser, Subcommand};
 use color_eyre::eyre::bail;
 
@@ -187,11 +188,35 @@ fn check_test_crate() -> Result {
     expect_file("tests/test-crate/stderr.txt", &stderr)?;
 
     // create html
-    cmd!("cargo +nightly doc -p test-crate").run()?;
+    let output =
+        cmd!("cargo +nightly doc -p test-crate --lib --message-format=json-render-diagnostics")
+            .stdout()?;
+    let manifest = util::relative_to_workspace("tests/test-crate/Cargo.toml");
+    let mut html_paths = Vec::new();
+    for message in Message::parse_stream(output.as_bytes()) {
+        if let Message::CompilerArtifact(artifact) = message?
+            && artifact.manifest_path.as_std_path() == manifest
+            && artifact.target.name == "test_crate"
+            && artifact.target.is_lib()
+        {
+            html_paths.extend(
+                artifact
+                    .filenames
+                    .into_iter()
+                    .filter(|path| path.ends_with("test_crate/index.html")),
+            );
+        }
+    }
+    let [html_path] = html_paths.as_slice() else {
+        bail!(
+            "expected one HTML artifact for test-crate from cargo +nightly doc, got {html_paths:?}; \
+             select a single compilation target with CARGO_BUILD_TARGET if multiple targets are configured"
+        );
+    };
 
     // diff links
     {
-        let html = read("target/doc/test_crate/index.html")?;
+        let html = read(html_path)?;
         let mut html_links = compare_links::extract_links_from_html(&html);
 
         let md = read("tests/test-crate/MEREAD.md")?;

@@ -81,7 +81,7 @@ fn generate_rustdoc_json(cx: &PackageContext) -> Result<PathBuf> {
         bail!("Failed to build rustdoc JSON{see}");
     }
 
-    Ok(path)
+    path
 }
 
 struct ExtractDocsOptions<'a> {

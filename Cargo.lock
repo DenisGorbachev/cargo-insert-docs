@@ -217,6 +217,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 3.0.6",
+ "tempfile",
  "toml",
  "toml_edit",
  "tracing",
@@ -2428,6 +2429,7 @@ version = "0.0.0"
 dependencies = [
  "anstream",
  "anstyle",
+ "cargo_metadata",
  "clap",
  "color-eyre",
  "fancy-regex",

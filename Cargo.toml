@@ -25,7 +25,7 @@ pre-release-replacements = [
 
 [workspace]
 members = ["tests/*", "xtask"]
-exclude = ["tests/test-config"]
+exclude = ["tests/test-config", "tests/rustdoc_json"]
 
 [workspace.dependencies]
 anstream = { version = "1.0.0", default-features = false, features = ["auto", "wincon"] }
@@ -53,6 +53,7 @@ serde = { version = "1.0.229", default-features = false, features = ["std"] }
 serde_json = { version = "1.0.151", default-features = false, features = ["std"] }
 similar = "3.2.0"
 syn = { version = "3.0.6", default-features = false }
+tempfile = { version = "3.27.0", default-features = false }
 tl = "0.7.8"
 toml = { version = "1.1.6", default-features = false, features = ["display", "parse", "serde", "std"] }
 toml_edit = { version = "0.25.15", default-features = false, features = ["parse"] }
@@ -95,4 +96,5 @@ unicode-id = { workspace = true }
 [dev-dependencies]
 expect-test = { workspace = true }
 indoc = { workspace = true }
+tempfile = { workspace = true }
 unindent = { workspace = true }

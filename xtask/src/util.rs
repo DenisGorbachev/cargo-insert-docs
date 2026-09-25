@@ -169,11 +169,6 @@ impl Cmd {
         Ok(self.output()?.status)
     }
 
-    pub fn run(self) -> Result {
-        self.output()?;
-        OK
-    }
-
     pub fn output(self) -> Result<Output> {
         let Self { args, unchecked, stdout, stderr, hooks } = self;
 
